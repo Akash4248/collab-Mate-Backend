@@ -25,12 +25,15 @@ app.set('trust proxy', 1);
 
 // CORS origins (set CORS_ORIGIN env to a single origin or comma-separated list)
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+const allowedOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim());
+const allowCredentials = allowedOrigins !== '*' && Array.isArray(allowedOrigins) && allowedOrigins.length > 0;
 
 // Configure Socket.io with CORS for Expo dev / Android emulator / Atlas-backed API consumers
 const io = new Server(server, {
   cors: {
-    origin: CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim()),
-    methods: ['GET', 'POST']
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+    credentials: allowCredentials,
   }
 });
 
@@ -40,8 +43,8 @@ app.locals.io = io;
 // Middlewares
 app.use(
   cors({
-    origin: CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim()),
-    credentials: true,
+    origin: allowedOrigins,
+    credentials: allowCredentials,
   })
 );
 app.use(express.json());
@@ -49,11 +52,19 @@ app.use(express.json());
 // Health check
 let dbStatus = 'disconnected';
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'CollabMate backend', db: dbStatus });
+  res.type('application/json').send({ status: 'ok', service: 'CollabMate backend', db: dbStatus });
+});
+app.head('/', (req, res) => {
+  res.status(200).end();
 });
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', db: dbStatus });
 });
+app.head('/health', (req, res) => {
+  res.status(200).end();
+});
+app.get('/ping', (req, res) => res.send('pong'));
+app.get('/api/healthz', (req, res) => res.json({ ok: true, db: dbStatus }));
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -149,5 +160,13 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// Catch-all process error logging (do not crash)
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
 
 
