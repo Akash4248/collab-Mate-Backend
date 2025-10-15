@@ -20,11 +20,16 @@ const { errorHandler, notFoundHandler } = require('./utils/errorHandlers');
 
 const app = express();
 const server = http.createServer(app);
+// Behind Railway/Reverse proxies
+app.set('trust proxy', 1);
 
-// Configure Socket.io with CORS for Expo dev and Android emulator
+// CORS origins (set CORS_ORIGIN env to a single origin or comma-separated list)
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+
+// Configure Socket.io with CORS for Expo dev / Android emulator / Atlas-backed API consumers
 const io = new Server(server, {
   cors: {
-    origin: '*', // In production, tighten this
+    origin: CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim()),
     methods: ['GET', 'POST']
   }
 });
@@ -33,12 +38,21 @@ const io = new Server(server, {
 app.locals.io = io;
 
 // Middlewares
-app.use(cors());
+app.use(
+  cors({
+    origin: CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim()),
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // Health check
+let dbStatus = 'disconnected';
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'CollabMate backend' });
+  res.json({ status: 'ok', service: 'CollabMate backend', db: dbStatus });
+});
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', db: dbStatus });
 });
 
 // API Routes
@@ -65,20 +79,69 @@ io.on('connection', (socket) => {
   });
 });
 
-// MongoDB connection
+// MongoDB connection with resilient startup for PaaS (e.g., Railway)
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/collabmate';
+const MONGO_DB_NAME = process.env.MONGO_DB_NAME || undefined; // Optional override for Atlas
 const PORT = process.env.PORT || 4000;
 
-mongoose
-  .connect(MONGO_URI)
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`CollabMate backend running on port ${PORT}`);
+mongoose.set('strictQuery', true);
+
+async function connectWithRetry(maxAttempts = 20, delayMs = 3000) {
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      attempt += 1;
+      await mongoose.connect(MONGO_URI, {
+        serverSelectionTimeoutMS: 10000,
+        maxPoolSize: 10,
+        dbName: MONGO_DB_NAME,
+      });
+      dbStatus = 'connected';
+      console.log('MongoDB connected');
+      break;
+    } catch (err) {
+      dbStatus = 'disconnected';
+      console.error(`MongoDB connection attempt ${attempt} failed:`, err?.message || err);
+      if (attempt >= maxAttempts) {
+        console.error('Max MongoDB connection attempts reached. Continuing without DB.');
+        break;
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
+// Start HTTP server immediately so the platform health checks succeed
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`CollabMate backend running on port ${PORT}`);
+});
+
+// Connect to MongoDB in background with retries
+connectWithRetry();
+
+// Update dbStatus on runtime connection state changes
+mongoose.connection.on('connected', () => {
+  dbStatus = 'connected';
+});
+mongoose.connection.on('disconnected', () => {
+  dbStatus = 'disconnected';
+});
+mongoose.connection.on('error', (err) => {
+  dbStatus = 'error';
+  console.error('MongoDB connection error:', err?.message || err);
+});
+
+// Graceful shutdown for Railway/Docker
+function shutdown() {
+  console.log('Shutting down...');
+  server.close(() => {
+    mongoose.connection.close(false).then(() => {
+      process.exit(0);
     });
-  })
-  .catch((err) => {
-    console.error('MongoDB connection error', err);
-    process.exit(1);
   });
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 

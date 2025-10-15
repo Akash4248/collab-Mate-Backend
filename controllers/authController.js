@@ -11,6 +11,7 @@ function generateToken(user) {
 // POST /api/auth/register
 // Register a new user
 async function register(req, res, next) {
+  console.log(req.body)
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -35,6 +36,7 @@ async function register(req, res, next) {
 // POST /api/auth/login
 // Authenticate user and return JWT
 async function login(req, res, next) {
+  console.log(req.body)
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
