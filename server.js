@@ -115,6 +115,12 @@ async function connectWithRetry(maxAttempts = 20, delayMs = 3000) {
 // Start HTTP server immediately so the platform health checks succeed
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`CollabMate backend running on port ${PORT}`);
+  if (!process.env.MONGO_URI) {
+    console.warn('MONGO_URI not set. Falling back to local MongoDB at 127.0.0.1. Set MONGO_URI to your Atlas URI in Railway.');
+  }
+  if (process.env.RAILWAY_ENVIRONMENT && /127\.0\.0\.1|localhost/.test(MONGO_URI)) {
+    console.warn('Detected Railway environment but MONGO_URI points to localhost. Update MONGO_URI to an Atlas connection string.');
+  }
 });
 
 // Connect to MongoDB in background with retries
